@@ -1167,4 +1167,7 @@ void __init trap_init(void)
 	cpu_init();
 
 	idt_setup_ist_traps();
+
+	/* Init #HV doorbell pages when running as an SEV-SNP guest */
+	sev_snp_init_hv_handling();
 }

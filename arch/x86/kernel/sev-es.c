@@ -201,8 +201,12 @@ struct ghcb *sev_es_get_ghcb(struct ghcb_state *state)
 	}
 
 	/* SEV-SNP guest requires that GHCB must be registered before using it. */
-	if (sev_snp_active() && !data->ghcb_registered) {
-		sev_snp_register_ghcb(__pa(ghcb));
+	if (!data->ghcb_registered) {
+		if (sev_snp_active()) {
+			sev_snp_register_ghcb(__pa(ghcb));
+			sev_snp_setup_hv_doorbell_page(ghcb);
+		} else
+			sev_es_wr_ghcb_msr(__pa(ghcb));
 		data->ghcb_registered = true;
 	}
 
@@ -620,6 +624,11 @@ int vmgexit_page_state_change(struct ghcb *ghcb, void *data)
 	ghcb_set_sw_scratch(ghcb, (u64)__pa(data));
 
 	return sev_es_ghcb_hv_call(ghcb, NULL, SVM_VMGEXIT_PAGE_STATE_CHANGE, 0, 0);
+}
+
+int vmgexit_hv_doorbell_page(struct ghcb *ghcb, u64 op, u64 pa)
+{
+	return sev_es_ghcb_hv_call(ghcb, NULL, SVM_VMGEXIT_HV_DOORBELL_PAGE, op, pa);
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
