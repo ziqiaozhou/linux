@@ -1439,7 +1439,8 @@ DEFINE_IDTENTRY_VC(exc_vmm_communication)
 	if (likely(!on_vc_fallback_stack(regs)))
 		safe_stack_exc_vmm_communication(regs, error_code);
 	else
-		ist_exc_vmm_communication(regs, error_code);
+		safe_stack_exc_vmm_communication(regs, error_code);
+		//ist_exc_vmm_communication(regs, error_code);
 }
 
 bool __init handle_vc_boot_ghcb(struct pt_regs *regs)
