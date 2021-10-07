@@ -215,7 +215,9 @@ syscall_return_via_sysret:
 
 	popq	%rdi
 	popq	%rsp
+SYM_INNER_LABEL(entry_SYSCALL_64_unsafe_stack, SYM_L_GLOBAL)
 	USERGS_SYSRET64
+SYM_INNER_LABEL(entry_SYSCALL_64_end, SYM_L_GLOBAL)
 SYM_CODE_END(entry_SYSCALL_64)
 
 /*
@@ -539,6 +541,15 @@ SYM_CODE_START(\asmsym)
 	jnz	.Lfrom_usermode_switch_stack_\@
 
 	call	paranoid_entry
+
+	UNWIND_HINT_REGS
+
+	/*
+	 * Switch off the IST stack to make it free for nested exceptions.
+	 */
+	movq	%rsp, %rdi		/* pt_regs pointer */
+	call	hv_switch_off_ist
+	movq	%rax, %rsp		/* Switch to new stack */
 
 	UNWIND_HINT_REGS
 
