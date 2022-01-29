@@ -29,7 +29,7 @@ jobs:
       - name: Config Tiny kernel for x86
         run: |
           make tinyconfig
-          script/config --set-val CONFIG_64BIT y
+          scripts/config --set-val CONFIG_64BIT y
           scripts/config --set-val CONFIG_TTY y
           scripts/config --set-val CONFIG_PRINTK y
           scripts/config --set-val CONFIG_BLK_DEV_INITRD y
