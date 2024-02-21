@@ -173,6 +173,9 @@ static void do_exc_hv(struct pt_regs *regs)
 			sysvec_x86_platform_ipi(regs);
 			break;
 #endif
+		case 0x30:
+                       hv_doorbell_apic_eoi_write(APIC_EOI, 0);
+                       break;
 		case 0x0:
 			break;
 		default:
