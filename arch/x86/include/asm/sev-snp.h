@@ -37,6 +37,26 @@
 
 /* Page State Change NAE event */
 #define SNP_PAGE_STATE_CHANGE_MAX_ENTRY		253
+
+/*
+ * AMD SEV Confidential computing blob structure. The structure is
+ * defined in OVMF UEFI firmware header:
+ * https://github.com/tianocore/edk2/blob/master/OvmfPkg/Include/Guid/ConfidentialComputingSevSnpBlob.h
+ */
+#define CC_BLOB_SEV_HDR_MAGIC	0x45444d41
+struct cc_blob_sev_info {
+	u32 magic;
+	u16 version;
+	u16 reserved;
+	u64 secrets_phys;
+	u32 secrets_len;
+	u32 rsvd1;
+	u64 cpuid_phys;
+	u32 cpuid_len;
+	u32 rsvd2;
+	u64 early_ghcb;
+} __packed;
+
 struct __packed snp_page_state_header {
 	uint16_t cur_entry;
 	uint16_t end_entry;
@@ -134,12 +154,10 @@ static inline void sev_snp_register_ghcb(unsigned long paddr) { }
 static inline void __init
 early_snp_set_memory_private(unsigned long vaddr, unsigned long paddr, unsigned int npages)
 {
-	return 0;
 }
 static inline void __init
 early_snp_set_memory_shared(unsigned long vaddr, unsigned long paddr, unsigned int npages)
 {
-	return 0;
 }
 static inline int snp_set_memory_shared(unsigned long vaddr, unsigned long paddr, unsigned int npages) { return 0; }
 static inline int snp_set_memory_private(unsigned long vaddr, unsigned long paddr, unsigned int npages) { return 0; }

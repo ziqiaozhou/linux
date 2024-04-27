@@ -18,6 +18,7 @@
 #include <linux/kexec.h>
 #include <linux/i8253.h>
 #include <linux/random.h>
+#include <linux/memblock.h>
 #include <asm/processor.h>
 #include <asm/hypervisor.h>
 #include <asm/hyperv-tlfs.h>
@@ -36,6 +37,7 @@
 #include <asm/svm.h>
 #include <asm/sev-es.h>
 #include <asm/sev-snp.h>
+#include <asm/snp/snp_vmpl.h>
 #include <asm/realmode.h>
 #include <asm/e820/api.h>
 
@@ -265,8 +267,8 @@ static void __init hv_smp_prepare_cpus(unsigned int max_cpus)
 }
 #endif
 
-static __init int hv_snp_set_rtc_noop(const struct timespec64 *now) { return -EINVAL; }
-static __init void hv_snp_get_rtc_noop(struct timespec64 *now) { }
+static int hv_snp_set_rtc_noop(const struct timespec64 *now) { return -EINVAL; }
+static void hv_snp_get_rtc_noop(struct timespec64 *now) { }
 
 static u32 processor_count;
 
@@ -287,6 +289,7 @@ static __init void hv_snp_get_smp_config(unsigned int early)
 static u8 ap_start_input_arg[PAGE_SIZE] __bss_decrypted __aligned(PAGE_SIZE);
 static u8 ap_start_stack[PAGE_SIZE] __aligned(PAGE_SIZE);
 
+#ifdef CONFIG_AMD_MEM_ENCRYPT
 int hv_snp_boot_ap(int cpu, unsigned long start_ip)
 {
 	struct vmcb_save_area *vmsa = (struct vmcb_save_area *)__get_free_page(GFP_KERNEL | __GFP_ZERO);
@@ -351,16 +354,26 @@ int hv_snp_boot_ap(int cpu, unsigned long start_ip)
 	asm volatile("movq %%cr0, %%rax;" : "=a" (vmsa->cr0));
 	vmsa->xcr0 = 1;
 
-	vmsa->g_pat = 0x0606060606060606ull;
+	vmsa->g_pat = 0x7040600070406ull;
+	printk("g_pat = 0x7040600070406ull\n");
 
 	vmsa->rip = (u64)start_ip;
 	vmsa->rsp = (u64)&ap_start_stack[PAGE_SIZE];
 
 	vmsa->sev_feature_snp = 1;
 	vmsa->sev_feature_restrict_injection = 1;
+	vmsa->vmpl = snp_get_vmpl();
+
+	// RMPADJUST ignored vmsa bit when VMPL>0 
+	if(!snp_is_vmpl0()){
+		// vmsa page should be defined at vmpl-0.
+		// snp_vmpl_wake_ap do vtl call to ask vmpl0 to set up vmsa.
+		int snp_vmpl_wake_ap(unsigned cpu, unsigned long vmsa_paddr);
+		return snp_vmpl_wake_ap(cpu, __pa(vmsa));
+	}
 
 	rmp_adjust.as_uint64 = 0;
-	rmp_adjust.target_vmpl = 1;
+	rmp_adjust.target_vmpl = snp_get_vmpl() + 1;
 	rmp_adjust.vmsa = 1;
 	RMPADJUST(vmsa, 0, rmp_adjust, ret);
 	if (ret != 0) {
@@ -410,6 +423,7 @@ done:
 	local_irq_restore(flags);
 	return ret;
 }
+#endif
 
 struct memory_map_entry {
 	u64 starting_gpn;
@@ -622,6 +636,7 @@ static void __init ms_hyperv_init_platform(void)
 	hv_init_clocksource();
 #endif
 
+#ifdef CONFIG_AMD_MEM_ENCRYPT
 	if (sev_snp_active()) {
 		x86_platform.legacy.reserve_bios_regions = 0;
 		x86_platform.set_wallclock = hv_snp_set_rtc_noop;
@@ -639,6 +654,11 @@ static void __init ms_hyperv_init_platform(void)
 
 		processor_count = *(u32 *)__va(0x802000);
 		BUG_ON(processor_count == 0);
+
+		if (!snp_is_vmpl0()) {
+			// memory should be pvalidated in advance when VMPL > 0.
+			return;
+		}
 
 		entry = (struct memory_map_entry *)(__va(0x802000) + sizeof(struct memory_map_entry));
 		BUG_ON(entry->starting_gpn != 0);
@@ -660,6 +680,7 @@ static void __init ms_hyperv_init_platform(void)
 			}
 		}
 	}
+#endif
 }
 
 static bool __init ms_hyperv_x2apic_available(void)

@@ -78,6 +78,11 @@ SYM_CODE_START_NOALIGN(startup_64)
 .Lon_kernel_cs:
 	UNWIND_HINT_EMPTY
 
+	pushq %rsi
+	movq %rsi, %rdi
+	call sme_enable
+	popq   %rsi
+
 	/* Sanitize CPU configuration */
 	call verify_cpu
 

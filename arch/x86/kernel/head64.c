@@ -41,7 +41,7 @@
 #include <asm/trapnr.h>
 #include <asm/sev-es.h>
 #include <asm/sev-snp.h>
-
+#include <asm/snp/snp_vmpl.h>
 /*
  * Manage page tables very early on.
  */
@@ -126,6 +126,8 @@ static bool __head check_la57_support(unsigned long physaddr)
 	return false;
 }
 #endif
+
+extern void init_hv_pending(void);
 
 /* Code in __startup_64() can be relocated during execution, but the compiler
  * doesn't have to generate PC-relative relocations when accessing globals from
@@ -279,7 +281,14 @@ unsigned long __head __startup_64(unsigned long physaddr,
 
 	/* Encrypt the kernel and related (if SME is active) */
 	sme_encrypt_kernel(bp);
+	// Clear hv_pending flag
 
+	if (!snp_is_vmpl0()) {
+		init_hv_pending();
+		extern unsigned long verismo_get_early_ghcb_addr(void);
+		unsigned long ghcb = verismo_get_early_ghcb_addr();
+		pmd[pmd_index(ghcb)] -= sme_get_me_mask();
+	}
 	/*
 	 * Clear the memory encryption mask from the .bss..decrypted section.
 	 * The bss section will be memset to zero later in the initialization so
@@ -589,6 +598,8 @@ static void startup_64_load_idt(unsigned long physbase)
 	native_load_idt(desc);
 }
 
+#include <asm/ptrace.h>
+extern bool lookup_cpuid_page(struct pt_regs *regs);
 /* This is used when running on kernel addresses */
 void early_setup_idt(void)
 {
@@ -598,7 +609,14 @@ void early_setup_idt(void)
 
 	bringup_idt_descr.address = (unsigned long)bringup_idt_table;
 	native_load_idt(&bringup_idt_descr);
+	ghcb_printf("early_setup_idt\n");
+	struct pt_regs regs = {.ax = 0x80000001, .cx = 0};
+	lookup_cpuid_page(&regs);
+	ghcb_printf("lookup_cpuid_page = %lx %lx %lx %lx\n",
+		regs.ax, regs.bx, regs.cx, regs.dx);
 }
+
+
 
 /*
  * Setup boot CPU state needed before kernel switches to virtual addresses.
@@ -615,4 +633,5 @@ void __head startup_64_setup_env(unsigned long physbase)
 		     "movl %%eax, %%es\n" : : "a"(__KERNEL_DS) : "memory");
 
 	startup_64_load_idt(physbase);
+	//ghcb_printf("%s : %d\n", __func__, __LINE__);
 }

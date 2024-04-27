@@ -494,6 +494,10 @@ void __init sme_enable(struct boot_params *bp)
 	char buffer[16];
 	u64 msr;
 
+	// Init SNP context via cc blob
+	extern void init_snp(struct boot_params *bp);
+	init_snp(bp);
+
 	/* Check for the SME/SEV support leaf */
 	eax = 0x80000000;
 	ecx = 0;

@@ -125,6 +125,81 @@ static bool early_setup_sev_es(void)
 	return true;
 }
 
+#include <asm/svm.h>
+#include <asm/hyperv-tlfs.h>
+#include <linux/version.h>
+static bool vmpl_register_osid = false;
+
+extern unsigned long verismo_register_early_ghcb_addr(void);
+extern int ghcb_printf(const char *fmt, ...);
+extern enum es_result sev_es_ghcb_hv_call(struct ghcb *ghcb,
+				   struct es_em_ctxt *ctxt,
+				   u64 exit_code, u64 exit_info_1,
+				   u64 exit_info_2);
+int only_set_pte_decrypted(unsigned long address);
+
+struct ghcb * verismo_register_early_ghcb(struct boot_params *bp) {
+	struct ghcb * ghcb;
+	unsigned long ghcb_vaddr;
+
+	extern bool sev_es_negotiate_protocol(void);
+	if (!sev_es_negotiate_protocol()) {
+		sev_es_terminate(GHCB_SEV_ES_REASON_PROTOCOL_UNSUPPORTED);
+	}
+
+	extern void init_snp(struct boot_params *bp);
+	init_snp(bp);
+
+	ghcb_vaddr = verismo_get_early_ghcb_addr();
+
+	ghcb_printf("verismo_get_early_ghcb_addr() = %lx %lx\n",
+		    verismo_get_early_ghcb_addr(), ghcb_vaddr);
+
+	//early_set_memory_decrypted(ghcb_vaddr, PAGE_SIZE);
+	if (only_set_pte_decrypted((unsigned long)ghcb_vaddr)){
+		sev_es_terminate(0);
+	}
+	memset(ghcb_vaddr, 0, PAGE_SIZE);
+	ghcb = (struct ghcb*) ghcb_vaddr;
+
+	if (((u64)ghcb) % 0x1000 != 0) {
+		sev_es_terminate(GHCB_SEV_ES_REASON_PROTOCOL_UNSUPPORTED);
+	}
+
+	sev_snp_register_ghcb((unsigned long)ghcb);
+
+	ghcb_printf("__pa(ghcb) = %lx %lx\n", __pa(ghcb), sev_es_rd_ghcb_msr());
+	if (sev_es_rd_ghcb_msr() != __pa(ghcb))
+	{
+		sev_es_terminate(0);
+	}
+	return ghcb;
+}
+
+void early_register_osid(struct boot_params * bp) {
+	unsigned long ghcb_page;
+	struct ghcb * ghcb;
+	struct es_em_ctxt ctxt;
+
+	u64 guest_id = 0x123;
+
+	// No need to do early register;
+	if (vmpl_register_osid) {
+		return;
+	}
+
+	vmpl_register_osid = true;
+
+	// register the early ghcb;
+	ghcb = verismo_register_early_ghcb(bp);
+	vc_ghcb_invalidate(ghcb);
+	// register OS ID.
+	ghcb_set_rcx(ghcb, HV_X64_MSR_GUEST_OS_ID);
+	ghcb_set_rax(ghcb, guest_id);
+	ghcb_set_rdx(ghcb, 0);
+	sev_es_ghcb_hv_call(ghcb, &ctxt, SVM_EXIT_MSR, 1, 0);
+}
+
 void sev_es_shutdown_ghcb(void)
 {
 	if (!boot_ghcb)

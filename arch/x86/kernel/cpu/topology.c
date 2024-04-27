@@ -126,10 +126,12 @@ int detect_extended_topology(struct cpuinfo_x86 *c)
 			die_level_siblings = core_level_siblings;
 			die_plus_mask_width = BITS_SHIFT_NEXT_LEVEL(eax);
 		}
-		if (LEAFB_SUBTYPE(ecx) == DIE_TYPE) {
+		else if (LEAFB_SUBTYPE(ecx) == DIE_TYPE) {
 			die_level_present = true;
 			die_level_siblings = LEVEL_MAX_SIBLINGS(ebx);
 			die_plus_mask_width = BITS_SHIFT_NEXT_LEVEL(eax);
+		} else {
+			break;
 		}
 
 		sub_index++;

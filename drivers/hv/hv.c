@@ -303,3 +303,8 @@ int hv_synic_cleanup(unsigned int cpu)
 
 	return 0;
 }
+
+struct hv_message* get_hv_message(void)
+{
+	return (struct hv_message*) this_cpu_ptr(hv_context.cpu_context)->synic_message_page;
+}

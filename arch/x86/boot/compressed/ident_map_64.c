@@ -311,9 +311,63 @@ static int set_clr_page_flags(struct x86_mapping_info *info,
 	return 0;
 }
 
+extern int ghcb_printf(const char *fmt, ...);
+
+int only_set_clear_enc(struct x86_mapping_info *info,
+			      unsigned long address,
+			      pteval_t set, pteval_t clr)
+{
+	pgd_t *pgdp = (pgd_t *)read_cr3_pa();
+	p4d_t *p4dp;
+	pud_t *pudp;
+	pmd_t *pmdp;
+	pte_t *ptep, pte;
+
+	/*
+	 * The page is mapped at least with PMD size - so skip checks and walk
+	 * directly to the PMD.
+	 */
+	p4dp = p4d_offset(pgdp, address);
+	pudp = pud_offset(p4dp, address);
+	pmdp = pmd_offset(pudp, address);
+
+	if (pmd_large(*pmdp)){
+		ghcb_printf("pmd_large %lx\n", address);
+		ptep = (pte_t *) pmdp;
+		*ptep = pte_clear_flags(*ptep, clr);
+		//ptep = split_large_pmd(info, pmdp, address);
+		clflush_page(address);
+		return 0;
+	} else {
+		ptep = pte_offset_kernel(pmdp, address);
+		ghcb_printf("pmd_4k at %lx\n", address);
+	}
+	if (!ptep)
+		return -ENOMEM;
+
+	/*
+	 * Changing encryption attributes of a page requires to flush it from
+	 * the caches.
+	 */
+	if ((set | clr) & _PAGE_ENC)
+		clflush_page(address);
+
+	/* Update PTE */
+	pte = *ptep;
+	pte = pte_set_flags(pte, set);
+	pte = pte_clear_flags(pte, clr);
+	set_pte(ptep, pte);
+	return 0;
+}
+
 int set_page_decrypted(unsigned long address)
 {
 	return set_clr_page_flags(&mapping_info, address, 0, _PAGE_ENC);
+}
+
+int only_set_pte_decrypted(unsigned long address)
+{
+	return only_set_clear_enc(&mapping_info, address, 0, _PAGE_ENC);
 }
 
 int set_page_encrypted(unsigned long address)

@@ -297,6 +297,19 @@ int netvsc_alloc_recv_comp_ring(struct netvsc_device *net_device, u32 q_idx)
 	return nvchan->mrc.slots ? 0 : -ENOMEM;
 }
 
+int netvsc_bounce_buffer = 4096;
+static int __init set_netvsc_bounce_buffer(char *p)
+{
+	netvsc_bounce_buffer = memparse(p, &p);
+	if (netvsc_bounce_buffer < 4096) {
+		pr_alert(
+			"Small netvsc_bounce_buffer(0x%x) may cause packet loss",
+			netvsc_bounce_buffer);
+	}
+	return 0;
+}
+//early_param("netvsc_bounce_buffer", set_netvsc_bounce_buffer);
+
 static int netvsc_init_buf(struct hv_device *device,
 			   struct netvsc_device *net_device,
 			   const struct netvsc_device_info *device_info)
@@ -309,7 +322,7 @@ static int netvsc_init_buf(struct hv_device *device,
 	int ret = 0;
 
 	ret = hv_bounce_resources_reserve(device->channel,
-			PAGE_SIZE * 4096);
+			PAGE_SIZE * netvsc_bounce_buffer);
 	if (ret) {
 		pr_warn("Fail to reserve bounce buffer.\n");
 		return -ENOMEM;

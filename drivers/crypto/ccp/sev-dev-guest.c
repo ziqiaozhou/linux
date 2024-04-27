@@ -29,6 +29,7 @@
 #include <linux/scatterlist.h>
 #include <linux/random.h>
 #include <asm/sev-es.h>
+#include <asm/snp/snp_vmpl.h>
 
 #define DEVICE_NAME		"sev"
 #define AAD_LEN			48
@@ -117,6 +118,7 @@ static int build_request_message(uint8_t *plaintext, int msg_type,
 	struct sev_guest_crypto *crypto = misc_dev->crypto;
 	struct snp_guest_request_msg_hdr *hdr;
 	uint8_t *payload;
+	unsigned vmpl = snp_get_vmpl();
 
 	hdr = (struct snp_guest_request_msg_hdr *)misc_dev->request;
 	payload = (uint8_t *)misc_dev->request + sizeof(*hdr);
@@ -127,7 +129,7 @@ static int build_request_message(uint8_t *plaintext, int msg_type,
 	hdr->msg_type = msg_type;
 	hdr->msg_seqno = msg_seqno;
 	hdr->msg_sz = len;
-	hdr->msg_vmpck = 0;
+	hdr->msg_vmpck = vmpl;
 	hdr->msg_version = msg_version;
 
 	*(uint64_t *)&crypto->iv[0] = msg_seqno;
@@ -168,7 +170,7 @@ static int verify_response_message(int msg_type, int msg_version, int *msg_sz, u
 	/* If the message size is greather than out buffer length then return an error. */
 	if (unlikely(hdr->msg_sz > *msg_sz))
 		return -EBADMSG;
-
+	*msg_sz = hdr->msg_sz;
 	return 0;
 }
 
@@ -191,7 +193,7 @@ static int expected_buf_sz(int type)
 	}
 }
 
-static int snp_guest_request(
+int snp_guest_request(
 	int msg_version,
 	int req_msg_type,
 	uint8_t *req_buf,
@@ -207,7 +209,9 @@ static int snp_guest_request(
 				    msg_version, req_len);
 	if (ret)
 		return ret;
-
+	
+	print_hex_dump(KERN_INFO, "SNP req : ", DUMP_PREFIX_NONE, req_len,
+		       1, (void *)req_buf, req_len, false);
 	/* Issue the VMGEXIT to formware the request to the SEV firmware. */
 	ret = vmgexit_snp_guest_request(misc_dev->request, misc_dev->response);
 	if (ret) {
@@ -357,16 +361,18 @@ static unsigned long alloc_shared_page(void)
 	return page;
 }
 
+extern u64 get_secrets_page(void);
 static struct sev_guest_crypto *init_crypto(void)
 {
 	struct sev_guest_crypto *crypto;
 	struct secret_page *secret;
-
+	unsigned vmpl = snp_get_vmpl();
 	/*
 	 * TODO: find the VMPCK and message sequence number through ACPI table.
 	 * Currently, we map the secret page directly to get the VMPCK to test the driver flow.
 	 */
-	secret = (struct secret_page *)ioremap_encrypted(0x801000, PAGE_SIZE);
+	u64 secret_page_phys = get_secrets_page();
+	secret = (struct secret_page *)ioremap_encrypted(secret_page_phys, PAGE_SIZE);
 	if (!secret) {
 		pr_err("failed to remap 0x801000.\n");
 		return NULL;
@@ -380,7 +386,7 @@ static struct sev_guest_crypto *init_crypto(void)
 	if (IS_ERR(crypto->tfm))
 		goto e_free;
 
-	if (crypto_aead_setkey(crypto->tfm, secret->vmpck0, 32))
+	if (crypto_aead_setkey(crypto->tfm, (u64)(secret->vmpck0) + vmpl * 32, 32))
 		goto e_free_crypto;
 
 	crypto->iv_len = crypto_aead_ivsize(crypto->tfm);
@@ -401,8 +407,8 @@ static struct sev_guest_crypto *init_crypto(void)
 	if (!crypto->authtag)
 		goto e_free_crypto;
 
-	pr_info("MSG sequence counter: %d\n", msg_seqno);
-	print_hex_dump(KERN_INFO, "VMPCK0 KEY : ", DUMP_PREFIX_NONE, 32, 1, secret->vmpck0, 32, false);
+	pr_info("MSG sequence counter: %d, vmpl = %d\n", msg_seqno, vmpl);
+	print_hex_dump(KERN_INFO, "VMPCK0 KEY : ", DUMP_PREFIX_NONE, 32, 1, (u64)(secret->vmpck0) + vmpl * 32, 32, false);
 
 	return crypto;
 e_free_crypto:

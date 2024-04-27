@@ -321,6 +321,8 @@ static void parse_elf(void *output)
 	free(phdrs);
 }
 
+#define debug_putstr ghcb_printf
+
 /*
  * The compressed kernel image (ZO), has been moved so that its position
  * is against the end of the buffer used to hold the uncompressed kernel
@@ -355,6 +357,9 @@ asmlinkage __visible void *extract_kernel(void *rmode, memptr heap,
 	boot_params->hdr.loadflags &= ~KASLR_FLAG;
 
 	sanitize_boot_params(boot_params);
+
+	extern void early_register_osid(struct boot_params *);
+	early_register_osid(boot_params);
 
 	if (boot_params->screen_info.orig_video_mode == 7) {
 		vidmem = (char *) 0xb0000;
@@ -437,6 +442,7 @@ asmlinkage __visible void *extract_kernel(void *rmode, memptr heap,
 #endif
 
 	debug_putstr("\nDecompressing Linux... ");
+
 	__decompress(input_data, input_len, NULL, NULL, output, output_len,
 			NULL, error);
 	parse_elf(output);
@@ -445,7 +451,6 @@ asmlinkage __visible void *extract_kernel(void *rmode, memptr heap,
 
 	/* Disable exception handling before booting the kernel */
 	cleanup_exception_handling();
-
 	return output;
 }
 

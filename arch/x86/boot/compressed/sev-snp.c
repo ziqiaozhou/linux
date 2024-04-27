@@ -13,6 +13,7 @@
 #include <asm/msr-index.h>
 #include <asm/sev-snp.h>
 #include <asm/sev-es.h>
+#include <asm/snp/snp_vmpl.h>
 
 #include "sev-snp.h"
 
@@ -82,11 +83,18 @@ e_fail:
 	sev_es_terminate(GHCB_SEV_ES_REASON_GENERAL_REQUEST);
 }
 
+#define __BOOT_COMPRESSED
+#define printk ghcb_printf
+#include "../../kernel/snp/snp-vmpl-shared.c"
 static void sev_snp_set_page_private_shared(unsigned long paddr, int op)
 {
 	if (!sev_snp_enabled())
 		return;
 
+	if (!snp_is_vmpl0()) {
+		snp_vmpl0_set_memory_shared_private(paddr, 1, op);
+		return;
+	}
 	/*
 	 * We are change the page state from private to shared, invalidate the pages before
 	 * making the page state change in the RMP table.
@@ -118,13 +126,7 @@ void sev_snp_set_page_shared(unsigned long paddr)
 void sev_snp_register_ghcb(unsigned long paddr)
 {
 	u64 pfn = paddr >> PAGE_SHIFT;
-	u64 old, val;
-
-	if (!sev_snp_enabled())
-		return;
-
-	/* save the old GHCB MSR */
-	old = sev_es_rd_ghcb_msr();
+	u64 val;
 
 	/* Issue VMGEXIT */
 	sev_es_wr_ghcb_msr(GHCB_REGISTER_GPA_REQ_VAL(pfn));
@@ -137,9 +139,11 @@ void sev_snp_register_ghcb(unsigned long paddr)
 	    (GHCB_REGISTER_GPA_RESP_VAL(val) != pfn))
 		sev_es_terminate(GHCB_SEV_ES_REASON_GENERAL_REQUEST);
 
-	/* Restore the GHCB MSR value */
-	sev_es_wr_ghcb_msr(old);
+	sev_es_wr_ghcb_msr(pfn << PAGE_SHIFT);
 }
+
+#define puts
+#include "../printf.c"
 
 static void extend_e820_on_demand(struct boot_e820_entry *e820_entry,
 				  u64 needed_ram_end)
@@ -158,6 +162,7 @@ static void extend_e820_on_demand(struct boot_e820_entry *e820_entry,
 	}
 }
 
+extern void init_snp(struct boot_params *bp);
 /*
  * Explictly pvalidate needed pages for decompressing the kernel.
  * The E820_TYPE_RAM entry includes only validated memory. The kernel
@@ -182,9 +187,24 @@ __visible void pvalidate_for_startup_64(struct boot_params *boot_params)
 		boot_params->hdr.pref_address + boot_params->hdr.init_size;
 	u64 needed_end;
 	u8 i, nr_entries = boot_params->e820_entries;
-	if (!sev_snp_enabled()) {
+
+	if (boot_params->cc_blob_address) {
+		init_snp(boot_params);
+	}
+	extern unsigned long verismo_get_early_ghcb_addr(void);
+	ghcb_printf("%s : %d cc blob = %lx shared= %lx boot_paramx = %lx\n",
+		__func__, __LINE__,
+		boot_params->cc_blob_address, verismo_get_early_ghcb_addr(), (u64)boot_params);
+	for (i = 0; i < nr_entries; ++i) {
+		/* Pvalidate memory holes in e820 RAM entries. */
+		e820_entry = &boot_params->e820_table[i];
+		ghcb_printf("%s: addr = %lx size =%lx type = %d\n", __func__, e820_entry->addr,
+			   e820_entry->size, e820_entry->type);
+	}
+	if (!sev_snp_enabled() || !snp_is_vmpl0()) {
 		return;
 	}
+
 	for (i = 0; i < nr_entries; ++i) {
 		/* Pvalidate memory holes in e820 RAM entries. */
 		e820_entry = &boot_params->e820_table[i];
@@ -196,6 +216,10 @@ __visible void pvalidate_for_startup_64(struct boot_params *boot_params)
 		} else {
 			needed_end = init_end;
 		}
+		ghcb_printf("%s: %lx %lx\n", __func__, e820_entry->addr,
+			   e820_entry->size);
 		extend_e820_on_demand(e820_entry, needed_end);
 	}
+	ghcb_printf("%s : %d\n", __func__, __LINE__);
+	
 }

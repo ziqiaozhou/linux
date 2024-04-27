@@ -363,7 +363,7 @@ void __printk_safe_exit(void)
 
 static DEFINE_SPINLOCK(printk_lock);
 
-static int hv_sev_printf(const char *fmt, va_list ap)
+int hv_sev_printf(const char *fmt, va_list ap)
 {
 	char buf[1024];
 	int len;
@@ -373,7 +373,17 @@ static int hv_sev_printf(const char *fmt, va_list ap)
 	u32 orig_low, orig_high;
 	u32 low, high;
 
+#ifndef CONFIG_SNP_DIRECT_NEXT_VMPL
+	extern unsigned snp_get_vmpl(void);
+	#define PREFIX "vm0:"
+	#define PREFIX_LEN (sizeof(PREFIX) - 1)
+	memcpy(buf, PREFIX, PREFIX_LEN);
+	buf[PREFIX_LEN-2] += snp_get_vmpl();
+	len = PREFIX_LEN;
+	len += vsnprintf(buf + PREFIX_LEN, sizeof(buf) - PREFIX_LEN, fmt, ap);
+#else
 	len = vsnprintf(buf, sizeof(buf), fmt, ap);
+#endif
 
 	local_irq_save(flags);
 	spin_lock(&printk_lock);
@@ -397,6 +407,16 @@ static int hv_sev_printf(const char *fmt, va_list ap)
 	return len;
 }
 
+int ghcb_printf(const char *fmt, ...)
+{
+	va_list args;
+	int printed = 0;
+	va_start(args, fmt);
+	printed = hv_sev_printf(fmt, args);
+	va_end(args);
+	return printed;
+}
+
 void hv_sev_debugbreak(u32 val)
 {
 	u32 low, high;
@@ -415,9 +435,12 @@ __printf(1, 0) int vprintk_func(const char *fmt, va_list args)
 	if (unlikely(kdb_trap_printk && kdb_printf_cpu < 0))
 		return vkdb_printf(KDB_MSGSRC_PRINTK, fmt, args);
 #endif
-
-	if (sev_snp_active())
-		return hv_sev_printf(fmt, args);
+	va_list ap;
+	if (sev_snp_active()){
+		va_copy(ap, args);
+		hv_sev_printf(fmt, ap);
+		va_end(ap);
+	}
 
 	/*
 	 * Try to use the main logbuf even in NMI. But avoid calling console

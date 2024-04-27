@@ -16,6 +16,8 @@
 
 #include <asm/sev-es.h>
 #include <asm/sev-snp.h>
+#include <asm/snp/snp_vmpl.h>
+
 #include <asm/svm.h>
 #include <asm/smp.h>
 #include <asm/cpu.h>
@@ -121,6 +123,11 @@ void __init sev_snp_init_hv_handling(void)
 }
 
 static DEFINE_PER_CPU(u8, hv_pending);
+
+void init_hv_pending(void)
+{
+   this_cpu_write(hv_pending, 0);
+}
 
 static void do_exc_hv(struct pt_regs *regs)
 {
@@ -356,6 +363,11 @@ void __init early_snp_set_memory_private(unsigned long vaddr, unsigned long padd
 					 unsigned int npages)
 {
 	 /* Ask hypervisor to add the memory in RMP table as a 'private'. */
+	if (!snp_is_vmpl0()) {
+		 snp_vmpl0_set_memory_shared_private(paddr, npages,
+						     SNP_PAGE_STATE_PRIVATE);
+		 return;
+	}
 	early_snp_set_page_state(paddr, npages, SNP_PAGE_STATE_PRIVATE);
 
 	/* Validate the memory region after its added in the RMP table. */
@@ -369,6 +381,12 @@ void __init early_snp_set_memory_shared(unsigned long vaddr, unsigned long paddr
 	 * We are chaning the memory from private to shared, invalidate the memory region
 	 * before making it shared in the RMP table.
 	 */
+	if (!snp_is_vmpl0()) {
+		//early_snp_set_page_state(paddr, npages, SNP_PAGE_STATE_SHARED);
+		snp_vmpl0_set_memory_shared_private(paddr, npages,
+						    SNP_PAGE_STATE_SHARED);
+		return;
+	}
 	sev_snp_issue_pvalidate(vaddr, npages, false);
 
 	 /* Ask hypervisor to make the memory shared in the RMP table. */
@@ -418,8 +436,6 @@ static void snp_set_page_state(unsigned long paddr, unsigned int npages, int op)
 	memset(data, 0, sizeof (*data));
 
 	for (idx = 0; paddr < paddr_end; paddr = paddr_next) {
-		int level = PG_LEVEL_4K;
-
 		/* If we cannot fit more request then issue VMGEXIT before going further.  */
 		if (hdr->end_entry == (SNP_PAGE_STATE_CHANGE_MAX_ENTRY - 1)) {
 			ret = snp_page_state_vmgexit(ghcb, data);
@@ -463,6 +479,11 @@ e_fail:
 
 int snp_set_memory_shared(unsigned long vaddr, unsigned long paddr, unsigned int npages)
 {
+	if (!snp_is_vmpl0()) {
+		return snp_vmpl0_set_memory_shared_private(
+			paddr, npages, SNP_PAGE_STATE_SHARED);
+	}
+
 	/* Invalidate the memory before changing the page state in the RMP table. */
 	sev_snp_issue_pvalidate(vaddr, npages, false);
 
@@ -474,6 +495,11 @@ int snp_set_memory_shared(unsigned long vaddr, unsigned long paddr, unsigned int
 
 int snp_set_memory_private(unsigned long vaddr, unsigned long paddr, unsigned int npages)
 {
+	if (!snp_is_vmpl0()) {
+		return snp_vmpl0_set_memory_shared_private(
+			paddr, npages, SNP_PAGE_STATE_PRIVATE);
+	}
+
 	/* Change the page state in the RMP table. */
 	snp_set_page_state(paddr, npages, SNP_PAGE_STATE_PRIVATE);
 

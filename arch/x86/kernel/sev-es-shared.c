@@ -40,9 +40,65 @@ struct sev_snp_cpuid_page
 	struct sev_snp_cpuid_leaf cpuid_leaf_info[SEV_SNP_CPUID_LEAF_COUNT_MAX];
 };
 
+static unsigned long verismo_early_ghcb = 0;
+
+unsigned long  __init verismo_get_early_ghcb_addr(void) {
+	return verismo_early_ghcb;
+}
+
+u64 secrets_page = 0x801000;
+u64 __init get_secrets_page(void)
+{
+	return secrets_page;
+}
+
+/*
+void __init set_secret_page(struct boot_params * bp)
+{
+	u64 pa_data = bp->cc_blob_address;
+	struct cc_blob_sev_info info;
+	void *map;
+	if (!pa_data)
+		return;
+	pr_info("cc_blob= %llx", pa_data);
+
+	map = early_memremap(pa_data, sizeof(info));
+	if (!map) {
+		pr_err("Unable to locate SNP secrets page: failed to map the Confidential Computing blob.\n");
+		return;
+	}
+	memcpy(&info, map, sizeof(info));
+	early_memunmap(map, sizeof(info));
+	pr_info("get_secrets_page= %llx %llx", info.secrets_phys, info.secrets_len);
+	// smoke-test the secrets page passed
+	if (!info.secrets_phys || info.secrets_len != PAGE_SIZE)
+		return;
+	secrets_page  = info.secrets_phys;
+}
+*/
+
 struct sev_snp_cpuid_page psp_cpuid_page = { .count = -1 };
 
-static bool lookup_cpuid_page(struct pt_regs *regs)
+static unsigned long cpuid_source_addr = 0x800000;
+
+extern void hv_sev_print(int);
+void __init init_snp(struct boot_params *bp) {
+	struct sev_snp_cpuid_page *cpuid_page;
+	struct cc_blob_sev_info * cc_blob;
+	if ((bp != NULL)  && (bp->cc_blob_address != 0)) {
+		cc_blob = (struct cc_blob_sev_info *)bp->cc_blob_address;
+		cpuid_source_addr = cc_blob->cpuid_phys;
+#ifndef __BOOT_COMPRESSED
+		asm volatile ("leaq psp_cpuid_page(%%rip), %0" : "=r" (cpuid_page));
+		if (cpuid_page->count == -1)
+			memcpy(cpuid_page, (struct sev_snp_cpuid_page *)cpuid_source_addr, sizeof(*cpuid_page));
+#endif
+		verismo_early_ghcb = cc_blob->early_ghcb;
+		secrets_page  = cc_blob->secrets_phys;
+	}
+}
+
+bool lookup_cpuid_page(struct pt_regs *regs)
 {
 	struct sev_snp_cpuid_page *cpuid_page;
 	u32 eax_in = lower_bits(regs->ax, 32);
@@ -54,11 +110,11 @@ static bool lookup_cpuid_page(struct pt_regs *regs)
 		ecx_in = 0;
 
 #ifdef __BOOT_COMPRESSED
-	cpuid_page = (struct sev_snp_cpuid_page *)0x800000;
+	cpuid_page = (struct sev_snp_cpuid_page *)cpuid_source_addr;
 #else
 	asm volatile ("leaq psp_cpuid_page(%%rip), %0" : "=r" (cpuid_page));
 	if (cpuid_page->count == -1)
-		memcpy(cpuid_page, (struct sev_snp_cpuid_page *)0x800000, sizeof(*cpuid_page));
+		memcpy(cpuid_page, (struct sev_snp_cpuid_page *)cpuid_source_addr, sizeof(*cpuid_page));
 #endif
 
 	for (i = 0; i < cpuid_page->count; i++) {
@@ -171,7 +227,15 @@ enum es_result sev_es_ghcb_hv_call(struct ghcb *ghcb,
 	ghcb_set_sw_exit_info_1(ghcb, exit_info_1);
 	ghcb_set_sw_exit_info_2(ghcb, exit_info_2);
 
-	BUG_ON(sev_es_rd_ghcb_msr() != __pa(ghcb));
+	if (sev_es_rd_ghcb_msr() != __pa(ghcb))
+	{
+#ifndef __BOOT_COMPRESSED
+		sev_es_wr_ghcb_msr(__pa(ghcb));
+#else
+		BUG_ON(sev_es_rd_ghcb_msr() != __pa(ghcb));
+#endif
+	}
+
 	VMGEXIT();
 
 	if ((ghcb->save.sw_exit_info_1 & 0xffffffff) == 1) {
@@ -568,6 +632,7 @@ static enum es_result vc_handle_cpuid(struct ghcb *ghcb,
 				      struct es_em_ctxt *ctxt)
 {
 	struct pt_regs *regs = ctxt->regs;
+
 	u32 cr4 = native_read_cr4();
 	enum es_result ret;
 
@@ -608,7 +673,10 @@ static enum es_result vc_handle_rdtsc(struct ghcb *ghcb,
 {
 	bool rdtscp = (exit_code == SVM_EXIT_RDTSCP);
 	enum es_result ret;
+	#ifndef __BOOT_COMPRESSED
 
+	printk("vc_handle_rdtsc\n");
+	#endif
 	ret = sev_es_ghcb_hv_call(ghcb, ctxt, exit_code, 0, 0);
 	if (ret != ES_OK)
 		return ret;
